@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.claw/
+.env
+*.log
+.DS_Store
+.cursor/

@@ -1,0 +1,27 @@
+{
+  "name": "ts-tiny-claw",
+  "version": "0.1.0",
+  "description": "A minimal TypeScript agent harness: ReAct loop, context engineering, file-based memory, tools with approval middleware, Feishu human-in-loop.",
+  "type": "module",
+  "bin": {
+    "claw": "dist/claw.js"
+  },
+  "scripts": {
+    "dev": "tsx --env-file=.env src/cli/main.ts",
+    "build": "tsup",
+    "start": "node dist/claw.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "openai": "^7.27.0"
+  }
+}
