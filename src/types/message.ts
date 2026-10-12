@@ -50,5 +50,5 @@ export interface ToolDefinition {
   name: string;
   description: string;
   /** 对应 JSON Schema */
-  inputSchema: unknown;
+  inputSchema?: unknown;
 }
