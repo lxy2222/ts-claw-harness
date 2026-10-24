@@ -1,7 +1,7 @@
-import { readFile, realpath, stat } from "node:fs/promises";
-import path from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import type { Context } from "../types/context";
 import type { baseTool } from "./registry";
+import { resolveInsideWorkDir } from "./workspace";
 
 const MAX_OUTPUT_CHARS = 20000;
 
@@ -29,7 +29,7 @@ export class ReadFileTool implements baseTool {
       throw new Error("参数 path 必须是非空字符串");
     }
 
-    const target = await this.resolveInsideWorkDir(filePath);
+    const target = await resolveInsideWorkDir(this.workDir, filePath);
     const info = await stat(target);
     if (!info.isFile()) {
       throw new Error(`${filePath} 不是文件`);
@@ -40,22 +40,5 @@ export class ReadFileTool implements baseTool {
       return content;
     }
     return `${content.slice(0, MAX_OUTPUT_CHARS)}\n\n[内容过长,已截断:共 ${content.length} 字符,只返回前 ${MAX_OUTPUT_CHARS} 字符]`;
-  }
-
-  /** realpath 会解析符号链接,避免通过软链接跳出工作区 */
-  private async resolveInsideWorkDir(filePath: string): Promise<string> {
-    const root = await realpath(this.workDir);
-    let target: string;
-    try {
-      target = await realpath(path.resolve(root, filePath));
-    } catch {
-      throw new Error(`文件不存在: ${filePath}`);
-    }
-
-    const relative = path.relative(root, target);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`拒绝访问工作区之外的路径: ${filePath}`);
-    }
-    return target;
   }
 }
