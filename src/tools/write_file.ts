@@ -6,8 +6,7 @@ import { resolveWritableInsideWorkDir } from "./workspace";
 
 /** 创建或覆盖写入工作区内的文件,缺失的父目录会自动创建 */
 export class WriteFileTool implements baseTool {
-  readonly name = "write_file";
-  readonly description =
+  readonly name = "write_file";  readonly description =
     "创建或覆盖写入一个文件。如果目录不存在会自动创建。请提供相对于工作区的相对路径。";
   readonly inputSchema = {
     type: "object",

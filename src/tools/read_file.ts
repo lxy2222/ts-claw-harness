@@ -7,8 +7,7 @@ const MAX_OUTPUT_CHARS = 20000;
 
 /** 读取工作区内的文本文件;路径限制在 workDir 之内,防止模型越界读取 */
 export class ReadFileTool implements baseTool {
-  readonly name = "read_file";
-  readonly description =
+  readonly name = "read_file";  readonly description =
     "读取当前工作区内指定文件的文本内容。path 为相对工作区根目录的路径,例如 hello.txt 或 src/index.ts。";
   readonly inputSchema = {
     type: "object",

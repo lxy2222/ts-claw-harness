@@ -1,6 +1,6 @@
 // main loop of the engine 
 import type { Context } from "../types/context";
-import type { Message, ToolDefinition } from "../types/message";
+import type { Message, ToolCall, ToolDefinition } from "../types/message";
 import type { ToolRegistry } from "../tools/registry";
 import type { LLMProvider } from "../provider";
 
@@ -41,7 +41,11 @@ export class AgentEngine {
     const history: Message[] = [
       {
         role: "system",
-        content: `You are tiny-claw, an expert coding assistant. You have full access to tools in the workspace.`,
+        content: [
+          "You are tiny-claw, an expert coding assistant. You have full access to tools in the workspace.",
+          // 同一批工具调用会并发执行,彼此之间没有先后顺序保证
+          "Tool calls returned in the same response are executed concurrently with no ordering guarantee. Never put a read and a write (or two writes) on the same file in the same batch; if one call depends on another's result, issue it in a later turn.",
+        ].join("\n"),
       },
       {
         role: "user",
@@ -105,26 +109,28 @@ export class AgentEngine {
         break;
       }
 
-      console.log(`[Engine] 模型请求调用 ${toolCalls.length} 个工具...`);
+      console.log(`[Engine] 模型请求并发调用 ${toolCalls.length} 个工具...`);
 
-      for (const toolCall of toolCalls) {
-        console.log(`  -> 🛠️ 执行工具: ${toolCall.name}, 参数: ${toolCall.arguments}`);
+      // 所有工具同时启动;Promise.all 的结果与 toolCalls 一一按下标对应(相当于 Go 中预分配的切片),
+      // executeTool 内部已捕获所有异常,单个工具失败不会中断其他工具
+      const observations = await Promise.all(
+        toolCalls.map((toolCall, idx) => this.executeAndObserve(ctx, toolCall, idx)),
+      );
+      console.log("[Engine] 所有并发工具执行完毕，开始聚合观察结果 (Observation)...");
 
-        const result = await this.registry.executeTool(ctx, toolCall);
-
-        if (result.isError) {
-          console.log(`  -> ❌ 工具执行报错: ${result.output}`);
-        } else {
-          console.log(`  -> ✅ 工具执行成功 (返回 ${Buffer.byteLength(result.output)} 字节)`);
-        }
-
-        // 将工具执行的观察结果追加到 history，准备进入下一轮
-        history.push({
-          role: "user",
-          content: result.output,
-          toolCallId: toolCall.id,
-        });
-      }
+      // 按模型给出的原始调用顺序追加,而不是按完成顺序
+      history.push(...observations);
     }
+  }
+
+  private async executeAndObserve(ctx: Context, toolCall: ToolCall, idx: number): Promise<Message> {
+    console.log(`  -> [Task-${idx}] 🛠️ 触发并行执行: ${toolCall.name}, 参数: ${toolCall.arguments}`);
+    const result = await this.registry.executeTool(ctx, toolCall);
+    if (result.isError) {
+      console.log(`  -> [Task-${idx}] ❌ 工具执行报错: ${result.output}`);
+    } else {
+      console.log(`  -> [Task-${idx}] ✅ 工具执行成功 (返回 ${Buffer.byteLength(result.output)} 字节)`);
+    }
+    return { role: "user", content: result.output, toolCallId: toolCall.id };
   }
 }

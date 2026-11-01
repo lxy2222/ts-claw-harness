@@ -40,6 +40,7 @@ export class RegistryImpl implements ToolRegistry {
     });
     return defs;
   }
+
   async executeTool(ctx: Context, toolCall: ToolCall): Promise<ToolResult> {
     const tool = this.tools.get(toolCall.name);
     if (!tool) {

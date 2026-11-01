@@ -21,8 +21,7 @@ interface RunResult {
 
 /** 在工作区内执行 bash 命令;命令失败时把报错作为普通输出返回,交给模型自行纠错 */
 export class BashTool implements baseTool {
-  readonly name = "bash";
-  readonly description =
+  readonly name = "bash";  readonly description =
     "在当前工作区执行任意的 bash 命令。支持链式命令(如 &&)。返回标准输出(stdout)和标准错误(stderr)。";
   readonly inputSchema = {
     type: "object",

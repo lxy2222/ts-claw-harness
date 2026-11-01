@@ -11,8 +11,7 @@ interface EditFileArgs {
 
 /** 对工作区内的已有文件做局部字符串替换;old_text 需唯一匹配,匹配不上时按 fuzzyReplace 逐级放宽 */
 export class EditFileTool implements baseTool {
-  readonly name = "edit_file";
-  readonly description =
+  readonly name = "edit_file";  readonly description =
     "对现有文件进行局部的字符串替换。这比重写整个文件更安全、更快速。请提供足够的 old_text 上下文以确保匹配的唯一性。";
   readonly inputSchema = {
     type: "object",
