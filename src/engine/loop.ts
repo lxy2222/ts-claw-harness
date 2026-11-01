@@ -1,4 +1,5 @@
 // main loop of the engine 
+import { PromptComposer } from "../context/composer";
 import type { Context } from "../types/context";
 import type { Message, ToolCall, ToolDefinition } from "../types/message";
 import type { ToolRegistry } from "../tools/registry";
@@ -21,12 +22,16 @@ function buildPlanningInstruction(tools: ToolDefinition[]): string {
 }
 
 export class AgentEngine {
+  private readonly composer: PromptComposer;
+
   constructor(
     private provider: LLMProvider,
     private registry: ToolRegistry,
     public workdir: string,
     public enableThinking: boolean = false,
-  ) {}
+  ) {
+    this.composer = new PromptComposer(workdir);
+  }
 
   async run(
     ctx: Context,
@@ -37,20 +42,14 @@ export class AgentEngine {
     }
     console.log(`[Engine] 引擎启动，锁定工作区: ${this.workdir}`);
     console.log(`[Engine] 慢思考模式 (Thinking Phase): ${this.enableThinking}`);
-    // todo: read this from the 
+
+    const systemMessage = this.composer.build();
     const history: Message[] = [
-      {
-        role: "system",
-        content: [
-          "You are tiny-claw, an expert coding assistant. You have full access to tools in the workspace.",
-          // 同一批工具调用会并发执行,彼此之间没有先后顺序保证
-          "Tool calls returned in the same response are executed concurrently with no ordering guarantee. Never put a read and a write (or two writes) on the same file in the same batch; if one call depends on another's result, issue it in a later turn.",
-        ].join("\n"),
-      },
+      systemMessage,
       {
         role: "user",
         content: userPrompt,
-      }
+      },
     ];
 
     let turnCnt = 0;
