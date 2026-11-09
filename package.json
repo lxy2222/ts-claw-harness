@@ -7,13 +7,14 @@
     "claw": "dist/claw.js"
   },
   "scripts": {
-    "dev": "tsx --env-file=.env src/cli/main.ts",
+    "dev": "tsx src/cli/main.ts",
     "build": "tsup",
     "start": "node dist/claw.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts"
   },
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20.12"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

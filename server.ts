@@ -53,6 +53,16 @@ const buildMockErrorResult = (): ApiResult => ({
 
 /** 路由分发：返回结果对象，由调用方统一写出响应，避免分支里漏写 end()。 */
 const route = (method: string, pathname: string): ApiResult => {
+  // 先判路径是否存在，再判请求方法，避免对未知路径返回 405 造成语义歧义。
+  const isKnownPath = pathname === "/health" || pathname === "/error";
+
+  if (!isKnownPath) {
+    return {
+      httpStatus: 404,
+      body: { code: 404, message: `请求的接口不存在：${pathname}` },
+    };
+  }
+
   if (method !== "GET") {
     return {
       httpStatus: 405,
@@ -67,14 +77,7 @@ const route = (method: string, pathname: string): ApiResult => {
     return buildHealthResult();
   }
 
-  if (pathname === "/error") {
-    return buildMockErrorResult();
-  }
-
-  return {
-    httpStatus: 404,
-    body: { code: 404, message: `请求的接口不存在：${pathname}` },
-  };
+  return buildMockErrorResult();
 };
 
 const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
@@ -87,10 +90,12 @@ const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const result = route(method, pathname);
     sendJson(res, result.httpStatus, result.body);
   } catch (error: unknown) {
+    // 原始异常信息可能为英文，仅记录到日志，不进入响应体，确保响应文案全为中文。
     const reason = error instanceof Error ? error.message : "未知错误";
+    console.error(`处理请求时发生异常：${reason}`);
     sendJson(res, 500, {
       code: 500,
-      message: `服务器内部错误：处理请求时发生异常（${reason}）`,
+      message: "服务器内部错误：处理请求时发生异常，请稍后重试",
     });
   }
 };

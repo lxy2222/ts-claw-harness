@@ -1,5 +1,4 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 /**
@@ -19,14 +18,13 @@ export class SkillLoader {
   constructor(private readonly workDir: string) {}
 
   /**
-   * 扫描技能目录（优先工作区 .claw/skills -> 工作区 .cursor/skills -> 全局 ~/.cursor/skills），
+   * 扫描工作区技能目录（优先 .claw/skills，若未找到则回退到 .cursor/skills），
    * 解析所有 SKILL.md，并格式化为字符串准备注入 Context
    */
   loadAll(): string {
     const candidateDirs = [
       path.join(this.workDir, ".claw", "skills"),
       path.join(this.workDir, ".cursor", "skills"),
-      path.join(os.homedir(), ".cursor", "skills"),
     ];
 
     let skillFiles: string[] = [];
@@ -38,7 +36,6 @@ export class SkillLoader {
         const found: string[] = [];
         this.walkSkillFiles(dir, found);
         if (found.length > 0) {
-          console.log(`[SkillLoader] 从 ${dir} 加载了 ${found.length} 个技能文件`);
           skillFiles = found;
           break;
         }

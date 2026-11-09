@@ -1,9 +1,5 @@
 import type { Context } from "../types/context";
-import type { 
-  ToolDefinition,
-  ToolCall,
-  ToolResult,
-} from "../types/message";
+import type { ToolDefinition, ToolCall, ToolResult } from "../types/message";
 // base tool registry
 export interface baseTool {
   name: string;
@@ -23,10 +19,10 @@ export class RegistryImpl implements ToolRegistry {
   private tools: Map<string, baseTool> = new Map();
   registerTool(tool: baseTool): void {
     if (this.tools.has(tool.name)) {
-      console.log(`${tool.name} already registered, it will be covered`);
+      console.log(`[Registry] 覆盖已存在的工具: ${tool.name}`);
     }
-    this.tools.set(tool.name, tool)
-    console.log(`${tool.name} registered successfully`);
+    this.tools.set(tool.name, tool);
+    console.log(`[Registry] 成功挂载工具: ${tool.name}`);
   }
 
   getAvailableTools(): ToolDefinition[] {
@@ -42,31 +38,35 @@ export class RegistryImpl implements ToolRegistry {
   }
 
   async executeTool(ctx: Context, toolCall: ToolCall): Promise<ToolResult> {
+    const failure = (output: string): ToolResult => ({
+      toolCallId: toolCall.id,
+      output,
+      isError: true,
+    });
+    if (ctx.signal.aborted) {
+      return failure("工具执行已取消");
+    }
     const tool = this.tools.get(toolCall.name);
     if (!tool) {
-      // 告诉大模型不存在
-      let errMsg = `There is no tool called ${toolCall.name}`
-      return {
-        toolCallId: toolCall.id,
-        output: errMsg,
-        isError: true,
-      }
+      return failure(`未找到工具：${toolCall.name}`);
+    }
+    let args: unknown;
+    try {
+      args = JSON.parse(toolCall.arguments);
+    } catch {
+      return failure(`工具 ${toolCall.name} 的参数不是有效的 JSON`);
     }
     try {
-      let result = await tool.execute(ctx, JSON.parse(toolCall.arguments));
+      const result = await tool.execute(ctx, args);
       return {
         toolCallId: toolCall.id,
         output: result,
         isError: false,
-      }
-    } catch (e) {
-      let errMsg = `Tool ${toolCall.name} execution failed: ${e}`
-      return {
-        toolCallId: toolCall.id,
-        output: errMsg,
-        isError: true,
-      }
+      };
+    } catch (error) {
+      if (ctx.signal.aborted) return failure("工具执行已取消");
+      const detail = error instanceof Error ? error.message : String(error);
+      return failure(`工具 ${toolCall.name} 执行失败：${detail}`);
     }
-    
   }
 }

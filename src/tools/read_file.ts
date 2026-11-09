@@ -1,9 +1,10 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 import type { Context } from "../types/context";
 import type { baseTool } from "./registry";
 import { resolveInsideWorkDir } from "./workspace";
 
-const MAX_OUTPUT_CHARS = 20000;
+const MAX_OUTPUT_CHARS = 8000;
 
 /** 读取工作区内的文本文件;路径限制在 workDir 之内,防止模型越界读取 */
 export class ReadFileTool implements baseTool {
@@ -34,10 +35,28 @@ export class ReadFileTool implements baseTool {
       throw new Error(`${filePath} 不是文件`);
     }
 
-    const content = await readFile(target, { encoding: "utf8", signal: ctx.signal });
+    if (ctx.signal.aborted) throw new Error("读取文件已取消");
+    const file = await open(target, "r");
+    const buffer = Buffer.alloc(16 * 1024);
+    const decoder = new StringDecoder("utf8");
+    let content = "";
+    try {
+      while (content.length <= MAX_OUTPUT_CHARS) {
+        if (ctx.signal.aborted) throw new Error("读取文件已取消");
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+        if (ctx.signal.aborted) throw new Error("读取文件已取消");
+        if (bytesRead === 0) {
+          content += decoder.end();
+          break;
+        }
+        content += decoder.write(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      await file.close();
+    }
     if (content.length <= MAX_OUTPUT_CHARS) {
       return content;
     }
-    return `${content.slice(0, MAX_OUTPUT_CHARS)}\n\n[内容过长,已截断:共 ${content.length} 字符,只返回前 ${MAX_OUTPUT_CHARS} 字符]`;
+    return `${content.slice(0, MAX_OUTPUT_CHARS)}\n\n[内容过长,已截断:文件共 ${info.size} 字节,只返回前 ${MAX_OUTPUT_CHARS} 字符]`;
   }
 }
