@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 1. 初始化大模型 Provider（若未配置 LLM_API_KEY 会在此处提前抛错，不会在磁盘上残留空目录）
+  // 1. 初始化大模型 Provider
   const provider = OpenAIProvider.fromEnv();
 
   // 2. 确定物理工作区：
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
   registry.registerTool(new BashTool(workDir, new CliApprovalChannel()));
   registry.registerTool(new EditFileTool(workDir));
 
-  // 4. 实例化引擎并开启计划模式 (enableThinking = options.thinking, planMode = options.planMode，默认 true)
+  // 4. 实例化引擎
   const eng = new AgentEngine(
     provider,
     registry,
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   const ctx: Context = { signal: controller.signal };
 
   try {
-    // 5. 使用固定的 SessionID (默认 "task_web_server_01") 获取或创建会话
+    // 5. 获取或创建会话
     const session = globalSessionMgr.getOrCreate(options.sessionId, workDir);
 
     console.log(`\n>>> 🚀 收到指令: ${options.prompt}\n`);

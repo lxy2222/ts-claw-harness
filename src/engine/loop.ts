@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Compactor } from "../context/compactor";
 import { PromptComposer } from "../context/composer";
+import { RecoveryManager } from "../context/recovery";
 import type { LLMProvider } from "../provider";
 import type { ToolRegistry } from "../tools/registry";
 import type { Context } from "../types/context";
@@ -45,6 +46,7 @@ function buildPlanningInstruction(tools: ToolDefinition[], planMode: boolean): s
 
 export class AgentEngine {
   private readonly compactor: Compactor;
+  private readonly recovery: RecoveryManager;
 
   /**
    * 历史由 Session 保存。工具注册表可能绑定工作区，因此每个工作区分别装配引擎和工具。
@@ -56,9 +58,11 @@ export class AgentEngine {
     public planMode: boolean = false,
     private readonly workingMemoryLimit: number = DEFAULT_WORKING_MEMORY_LIMIT,
     compactor?: Compactor,
+    recovery?: RecoveryManager,
   ) {
     this.compactor =
       compactor ?? new Compactor(DEFAULT_COMPACTOR_MAX_CHARS, DEFAULT_COMPACTOR_RETAIN_MSGS);
+    this.recovery = recovery ?? new RecoveryManager();
   }
 
   /**
@@ -241,10 +245,11 @@ export class AgentEngine {
       };
     }
     if (result.isError) {
-      console.log(`[❌ 执行失败] ${toolCall.name}: ${result.output}`);
-    } else {
-      console.log(`[✅ 执行成功] ${toolCall.name}`);
+      const enhancedError = this.recovery.analyzeAndInject(toolCall.name, result.output);
+      console.log(`[❌ 执行失败] ${toolCall.name}: ${enhancedError}`);
+      return { role: "user", content: enhancedError, toolCallId: toolCall.id };
     }
+    console.log(`[✅ 执行成功] ${toolCall.name}`);
     return { role: "user", content: result.output, toolCallId: toolCall.id };
   }
 }
