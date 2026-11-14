@@ -4,10 +4,11 @@ import path from "node:path";
 import { Compactor } from "../context/compactor";
 import { PromptComposer } from "../context/composer";
 import { RecoveryManager } from "../context/recovery";
+import { Reminder } from "../context/reminder";
 import type { LLMProvider } from "../provider";
 import type { ToolRegistry } from "../tools/registry";
 import type { Context } from "../types/context";
-import type { Message, ToolCall, ToolDefinition } from "../types/message";
+import type { Message, ToolCall, ToolDefinition, ToolResult } from "../types/message";
 import { globalSessionMgr, Session } from "./session";
 
 const DEFAULT_WORKING_MEMORY_LIMIT = 20;
@@ -17,6 +18,11 @@ const DEFAULT_COMPACTOR_RETAIN_MSGS = 4;
 export interface RunOptions {
   maxTurns?: number;
   onTextDelta?: (text: string) => void;
+}
+
+interface ExecutionOutcome {
+  observation: Message;
+  rawResult: ToolResult;
 }
 
 function assertActive(ctx: Context): void {
@@ -47,6 +53,7 @@ function buildPlanningInstruction(tools: ToolDefinition[], planMode: boolean): s
 export class AgentEngine {
   private readonly compactor: Compactor;
   private readonly recovery: RecoveryManager;
+  private readonly reminder: Reminder;
 
   /**
    * 历史由 Session 保存。工具注册表可能绑定工作区，因此每个工作区分别装配引擎和工具。
@@ -59,10 +66,12 @@ export class AgentEngine {
     private readonly workingMemoryLimit: number = DEFAULT_WORKING_MEMORY_LIMIT,
     compactor?: Compactor,
     recovery?: RecoveryManager,
+    reminder?: Reminder,
   ) {
     this.compactor =
       compactor ?? new Compactor(DEFAULT_COMPACTOR_MAX_CHARS, DEFAULT_COMPACTOR_RETAIN_MSGS);
     this.recovery = recovery ?? new RecoveryManager();
+    this.reminder = reminder ?? new Reminder();
   }
 
   /**
@@ -101,6 +110,9 @@ export class AgentEngine {
 
       // 根据当前 Session 绑定的物理工作区和 planMode 开关动态创建 PromptComposer
       const composer = new PromptComposer(session.workDir, this.planMode);
+
+      // 每次 run 启动时重置死循环检测计数器
+      this.reminder.reset();
 
       // 防止模型在 TODO.md 尚未全部打勾时中途偷懒退出的最大督促次数
       let todoRemindCount = 0;
@@ -154,8 +166,12 @@ export class AgentEngine {
 
         let actionResp: Message;
         try {
-          actionResp = await this.provider.generate(ctx, actionContext, availableTools,
-            options.onTextDelta ? { onTextDelta: options.onTextDelta } : undefined);
+          actionResp = await this.provider.generate(
+            ctx,
+            actionContext,
+            availableTools,
+            options.onTextDelta ? { onTextDelta: options.onTextDelta } : undefined,
+          );
         } catch (error) {
           assertActive(ctx);
           throw new Error("行动阶段生成失败", { cause: error });
@@ -202,11 +218,23 @@ export class AgentEngine {
           return;
         }
 
-        const observations = await Promise.all(
+        const outcomes = await Promise.all(
           toolCalls.map((toolCall) => this.executeAndObserve(ctx, toolCall)),
         );
 
-        session.append(...observations);
+        // 1. 先将所有带 toolCallId 的工具观察结果追加进 Session（满足大模型 API 要求每个 toolCall 必须紧跟 toolResult 的协议约束）
+        session.append(...outcomes.map((o) => o.observation));
+
+        // 2. 运行 Reminder 死循环检测：若连续失败达到阈值，在所有 toolResult 之后追加一条高权重的 Role.User 元认知警告消息
+        for (let i = 0; i < toolCalls.length; i++) {
+          const call = toolCalls[i]!;
+          const outcome = outcomes[i]!;
+          const warningMsg = this.reminder.analyzeAndRemind(call, outcome.rawResult);
+          if (warningMsg) {
+            session.append(warningMsg);
+          }
+        }
+
         assertActive(ctx);
       }
       throw new Error(`任务已达到最大执行轮数（${maxTurns}），请检查执行记录后继续`);
@@ -229,10 +257,10 @@ export class AgentEngine {
     }
   }
 
-  private async executeAndObserve(ctx: Context, toolCall: ToolCall): Promise<Message> {
+  private async executeAndObserve(ctx: Context, toolCall: ToolCall): Promise<ExecutionOutcome> {
     console.log(`\n[🛠️ 调用工具] ${toolCall.name}`);
     console.log(`   参数: ${toolCall.arguments}`);
-    let result;
+    let result: ToolResult;
     try {
       result = ctx.signal.aborted
         ? { toolCallId: toolCall.id, output: "任务已取消，未启动此工具", isError: true }
@@ -246,10 +274,17 @@ export class AgentEngine {
     }
     if (result.isError) {
       const enhancedError = this.recovery.analyzeAndInject(toolCall.name, result.output);
-      console.log(`[❌ 执行失败] ${toolCall.name}: ${enhancedError}`);
-      return { role: "user", content: enhancedError, toolCallId: toolCall.id };
+      console.log(`[❌ 执行失败] ${toolCall.name}`);
+      console.log(`   错误: ${enhancedError}`);
+      return {
+        observation: { role: "user", content: enhancedError, toolCallId: toolCall.id },
+        rawResult: result,
+      };
     }
     console.log(`[✅ 执行成功] ${toolCall.name}`);
-    return { role: "user", content: result.output, toolCallId: toolCall.id };
+    return {
+      observation: { role: "user", content: result.output, toolCallId: toolCall.id },
+      rawResult: result,
+    };
   }
 }

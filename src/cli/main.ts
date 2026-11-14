@@ -19,7 +19,9 @@ import { HELP, parseCliArgs } from "./options";
 async function main(): Promise<void> {
   // 通过命令行参数接收用户的 prompt（支持 -prompt "xxx" 或直接位置参数 "xxx"）
   const rawArgs = process.argv.slice(2);
-  const options = parseCliArgs(rawArgs);
+  const options = parseCliArgs(
+    rawArgs.length > 0 ? rawArgs : ["--no-plan", "-s", "test_loop_001", "__DEFAULT_PROMPT__"],
+  );
   if (options.help) {
     console.log(HELP);
     return;
@@ -70,8 +72,8 @@ async function main(): Promise<void> {
   const eng = new AgentEngine(
     provider,
     registry,
-    options.thinking,
-    options.planMode,
+    false,
+    false,
     20,
     new Compactor(options.maxContextChars, 4),
   );
@@ -83,12 +85,19 @@ async function main(): Promise<void> {
 
   try {
     // 5. 获取或创建会话
+    const prompt =
+      options.prompt !== "__DEFAULT_PROMPT__"
+        ? options.prompt
+        : `
+    请读取当前目录下的 service_key 文件。注意：我们的文件系统现在非常不稳定，经常报 File Not Found。 如果报错了，请你【千万不要改变参数】，直接原样再次调用 read_file 尝试，直到成功或连续重试 5 次为。
+    `.trim();
     const session = globalSessionMgr.getOrCreate(options.sessionId, workDir);
 
-    console.log(`\n>>> 🚀 收到指令: ${options.prompt}\n`);
+
+    console.log(`\n>>> 🚀 收到指令: ${prompt}\n`);
 
     // 将用户的 Prompt 压入 Session 并唤醒引擎执行
-    session.append({ role: Role.User, content: options.prompt });
+    session.append({ role: Role.User, content: prompt });
     await eng.run(ctx, session, undefined, {
       maxTurns: options.maxTurns,
       ...(options.stream

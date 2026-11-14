@@ -2,4 +2,5 @@
 export { Compactor } from "./compactor";
 export { PromptComposer } from "./composer";
 export { RecoveryManager } from "./recovery";
+export { DEFAULT_MAX_REPEATED_FAILURES, Reminder } from "./reminder";
 export { parseSkillMD, type Skill, SkillLoader } from "./skill";
