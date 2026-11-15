@@ -37,9 +37,9 @@ export class BashTool implements baseTool {
     required: ["command"],
   };
   private readonly workDir: string = "";
-  private readonly approval: ApprovalChannel;
+  private readonly approval?: ApprovalChannel;
 
-  constructor(workDir: string, approval: ApprovalChannel) {
+  constructor(workDir: string, approval?: ApprovalChannel) {
     this.workDir = workDir;
     this.approval = approval;
   }
@@ -52,7 +52,7 @@ export class BashTool implements baseTool {
     }
 
     const danger = detectDanger(command);
-    if (danger) {
+    if (danger && this.approval) {
       const approved = await this.approval.ask({ toolName: this.name, reason: danger, detail: command });
       if (!approved) {
         throw new Error(`用户拒绝执行危险命令(${danger})。请改用更安全的方式,或先向用户说明原因再重试`);

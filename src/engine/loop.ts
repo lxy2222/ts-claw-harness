@@ -242,6 +242,92 @@ export class AgentEngine {
   }
 
   /**
+   * 拉起一个完全物理隔离的子智能体循环 (Sub-Agent Loop)
+   *
+   * 设计约束：
+   * 1. 防偷懒系统提示词：严厉警告必须调用工具实地探测，严禁凭空猜测；
+   * 2. 限制最大轮数 (默认 10 轮)，防止无限消耗；
+   * 3. 极速响应：强制关闭慢思考 (enableThinking = false)，直接预测行动；
+   * 4. 权限隔离：只可使用传入的 subRegistry（如只读工具列表）；
+   * 5. 退出条件：当 toolCalls 数量为 0 时，说明 Sub-Agent 完成了总结汇报，直接将其 content 返回给主 Agent；
+   * 6. 并行可见：每次调用使用独立的 subAgentId 前缀打印日志，方便用户在终端观察多个 Sub-Agent 并行探索。
+   */
+  async runSubAgent(
+    ctx: Context,
+    directive: string,
+    subRegistry: ToolRegistry,
+    maxSubTurns: number = 10,
+  ): Promise<string> {
+    assertActive(ctx);
+    const subId = `SubAgent-${Math.random().toString(36).slice(2, 6)}`;
+    const availableTools = subRegistry.getAvailableTools();
+    const toolNames = availableTools.map((t) => t.name).join(", ") || "无";
+
+    console.log(`\n  🛸 [${subId}] 子智能体已唤醒! 专项指令: "${directive}" (可用工具: ${toolNames})`);
+
+    const subSystemPrompt: Message = {
+      role: "system",
+      content: [
+        "你是一个专门负责深度探索的探路者 (Explorer Subagent)。你的任务是根据主架构师的指令，在当前工作区内仔细阅读代码、查阅日志，搜集足够的信息。",
+        "【核心纪律】",
+        "1. 你必须、且只能依靠内置工具（如 bash 的 find/grep，或 read_file）去寻找答案。绝对不允许凭空捏造或猜测！",
+        "2. 如果你没有找到确切的答案，你必须继续使用工具深入搜索。",
+        "3. 当且仅当你找到了确切的线索后，停止调用工具，直接输出一段纯文本作为你的终极汇报。主架构师会根据你的汇报来做下一步决策。",
+      ].join("\n"),
+    };
+
+    // 完全隔离的局部消息历史（不写入主 Session，不污染主 Agent 的 Working Memory）
+    const subHistory: Message[] = [
+      subSystemPrompt,
+      { role: "user", content: directive },
+    ];
+
+    for (let turn = 1; turn <= maxSubTurns; turn++) {
+      assertActive(ctx);
+      console.log(`  🔄 [${subId} | Turn ${turn}/${maxSubTurns}] 正在推理行动...`);
+
+      // Sub-Agent 要求极速响应：强制关闭慢思考，直接带着 subRegistry 的受限工具列表发起行动推理
+      let resp: Message;
+      try {
+        resp = await this.provider.generate(ctx, subHistory, availableTools);
+      } catch (error) {
+        assertActive(ctx);
+        throw new Error(`[${subId}] 推理失败`, { cause: error });
+      }
+      assertActive(ctx);
+
+      subHistory.push(resp);
+
+      const toolCalls = resp.toolCalls;
+      // 退出条件：当 Sub-Agent 的 toolCalls 为空（0 个工具调用）时，说明它已经做好了总结汇报！
+      if (!toolCalls || toolCalls.length === 0) {
+        const report = resp.content || "（子智能体未返回文本结论）";
+        console.log(`  🎯 [${subId}] 探索完成，向主 Agent 提交总结汇报:\n     ${report.replace(/\n/g, "\n     ")}`);
+        return report;
+      }
+
+      // 并行执行 Sub-Agent 请求的受限工具
+      const observations = await Promise.all(
+        toolCalls.map(async (tc) => {
+          console.log(`  -> [${subId} 🛠️ 调用工具] ${tc.name} 参数: ${tc.arguments}`);
+          const res = await subRegistry.executeTool(ctx, tc);
+          if (res.isError) {
+            const enhanced = this.recovery.analyzeAndInject(tc.name, res.output);
+            console.log(`  -> [${subId} ❌ 失败] ${tc.name}: ${enhanced}`);
+            return { role: "user" as const, content: enhanced, toolCallId: tc.id };
+          }
+          console.log(`  -> [${subId} ✅ 成功] ${tc.name}`);
+          return { role: "user" as const, content: res.output, toolCallId: tc.id };
+        }),
+      );
+
+      subHistory.push(...observations);
+    }
+
+    throw new Error(`[${subId}] 已达到子任务最大探索轮数（${maxSubTurns} 轮），未能完成最终汇报。`);
+  }
+
+  /**
    * 检查工作区下的 TODO.md 是否还存在未完成的 `- [ ]` 任务项
    */
   private hasUnfinishedTodos(workDir: string): boolean {
