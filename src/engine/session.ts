@@ -127,6 +127,17 @@ export class Session {
   private readonly persistPath: string;
   private needsLineBreak = false;
 
+  /** 可观测性统计：累计输入（Prompt）Token 数量 */
+  public totalPromptTokens = 0;
+  /** 可观测性统计：累计大模型输出（Completion）Token 数量 */
+  public totalCompletionTokens = 0;
+  /** 可观测性统计：累计输入提示词的 Token 费用（元/RMB 或 USD） */
+  public totalInputCost = 0;
+  /** 可观测性统计：累计大模型输出的 Token 费用（元/RMB 或 USD） */
+  public totalOutputCost = 0;
+  /** 可观测性统计：累计大模型推理总耗时（毫秒） */
+  public totalDurationMs = 0;
+
   constructor(id: string, workDir: string) {
     validateSessionId(id);
     this.id = id;
@@ -192,6 +203,47 @@ export class Session {
   /** 获取当前会话历史总条数 */
   size(): number {
     return this.history.length;
+  }
+
+  /**
+   * 累加一次大模型推理的 Token 消耗、费用与耗时统计
+   */
+  recordMetrics(
+    promptTokens: number,
+    completionTokens: number,
+    inputCost: number,
+    outputCost: number,
+    durationMs: number = 0,
+  ): void {
+    this.totalPromptTokens += promptTokens;
+    this.totalCompletionTokens += completionTokens;
+    this.totalInputCost += inputCost;
+    this.totalOutputCost += outputCost;
+    this.totalDurationMs += durationMs;
+    this.updatedAt = new Date();
+  }
+
+  /**
+   * 获取当前 Session 的累计可观测性账单摘要
+   */
+  getMetricsSummary(): {
+    totalPromptTokens: number;
+    totalCompletionTokens: number;
+    totalTokens: number;
+    totalInputCost: number;
+    totalOutputCost: number;
+    totalCost: number;
+    totalDurationMs: number;
+  } {
+    return {
+      totalPromptTokens: this.totalPromptTokens,
+      totalCompletionTokens: this.totalCompletionTokens,
+      totalTokens: this.totalPromptTokens + this.totalCompletionTokens,
+      totalInputCost: this.totalInputCost,
+      totalOutputCost: this.totalOutputCost,
+      totalCost: this.totalInputCost + this.totalOutputCost,
+      totalDurationMs: this.totalDurationMs,
+    };
   }
 
   /**

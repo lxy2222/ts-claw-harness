@@ -14,6 +14,16 @@ export const Role = {
   Assistant: "assistant",
 } as const satisfies Record<string, Role>;
 
+/** 单次大模型调用的 Token 消耗统计 */
+export interface TokenUsage {
+  /** 输入提示词 (Prompt) 消耗的 Token 数 */
+  promptTokens: number;
+  /** 模型输出 (Completion) 消耗的 Token 数 */
+  completionTokens: number;
+  /** 总计消耗的 Token 数 */
+  totalTokens: number;
+}
+
 /** 上下文中传递的单条消息 */
 export interface Message {
   role: Role;
@@ -25,6 +35,8 @@ export interface Message {
   toolCalls?: ToolCall[];
   /** 对某个工具调用的响应时必填,告知模型上下文的关联性 */
   toolCallId?: string;
+  /** 本次模型响应消耗的 Token 统计（由 Provider 填充，供 Tracker 装饰器与 Session 统计） */
+  usage?: TokenUsage;
 }
 
 /** 模型请求调用某个具体的工具 */

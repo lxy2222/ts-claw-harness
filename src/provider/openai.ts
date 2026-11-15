@@ -40,7 +40,7 @@ export class OpenAIProvider implements LLMProvider {
     this.model = options.model ?? DEEPSEEK_DEFAULT_MODEL;
   }
 
-  /** 从环境变量读取配置:LLM_API_KEY(必填)、LLM_BASE_URL、LLM_MODEL */
+  /** 从环境变量读取配置:LLM_API_KEY(必填)、LLM_BAxwSE_URL、LLM_MODEL */
   static fromEnv(env: NodeJS.ProcessEnv = process.env): OpenAIProvider {
     const apiKey = env.LLM_API_KEY;
     if (!apiKey) {
@@ -78,7 +78,7 @@ export class OpenAIProvider implements LLMProvider {
     try {
       if (options.onTextDelta) {
         const stream = await this.client.chat.completions.create(
-          { ...body, stream: true },
+          { ...body, stream: true, stream_options: { include_usage: true } },
           requestOptions,
         );
         return await this.fromOpenAIStream(stream, options.onTextDelta, ctx);
@@ -88,13 +88,28 @@ export class OpenAIProvider implements LLMProvider {
         body,
         requestOptions,
       );
-
+      // 提取大模型 API 返回的真实 Token 消耗
+      const usage =
+        response.usage &&
+        (response.usage.prompt_tokens > 0 || response.usage.completion_tokens > 0)
+          ? {
+              promptTokens: response.usage.prompt_tokens,
+              completionTokens: response.usage.completion_tokens,
+              totalTokens:
+                response.usage.total_tokens ??
+                response.usage.prompt_tokens + response.usage.completion_tokens,
+            }
+          : undefined;
       const choice = response.choices[0];
       if (!choice) {
         throw new ProviderResponseError("模型服务未返回任何候选结果");
       }
       this.validateFinishReason(choice.finish_reason);
-      return this.fromOpenAIMessage(choice.message);
+      const msg = this.fromOpenAIMessage(choice.message);
+      if (usage) {
+        msg.usage = usage;
+      }
+      return msg;
     } catch (error) {
       if (ctx.signal.aborted) {
         throw this.abortedError(ctx, error);
@@ -140,10 +155,25 @@ export class OpenAIProvider implements LLMProvider {
     let content = "";
     let reasoningContent = "";
     let finishReason: string | null = null;
+    let streamUsage:
+      | { promptTokens: number; completionTokens: number; totalTokens: number }
+      | undefined;
     const toolCalls = new Map<number, ToolCall>();
 
     for await (const chunk of stream) {
       if (ctx.signal.aborted) throw this.abortedError(ctx);
+      if (
+        chunk.usage &&
+        (chunk.usage.prompt_tokens > 0 || chunk.usage.completion_tokens > 0)
+      ) {
+        streamUsage = {
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+          totalTokens:
+            chunk.usage.total_tokens ??
+            chunk.usage.prompt_tokens + chunk.usage.completion_tokens,
+        };
+      }
       const choice = chunk.choices.find((item) => item.index === 0);
       // 厂商可能在完成标记后额外发送 usage chunk,其中没有 choices。
       if (!choice) continue;
@@ -195,6 +225,7 @@ export class OpenAIProvider implements LLMProvider {
       content,
       ...(reasoningContent ? { reasoningContent } : {}),
       toolCalls: completedTools,
+      ...(streamUsage ? { usage: streamUsage } : {}),
     };
   }
 

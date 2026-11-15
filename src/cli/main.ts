@@ -1,17 +1,17 @@
 // 入口交互层:解析参数、装配依赖、启动 engine。
-import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, realpathSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadEnvFile } from "node:process";
 import { Compactor } from "../context/compactor";
 import { AgentEngine } from "../engine/loop";
 import { globalSessionMgr } from "../engine/session";
 import { OpenAIProvider } from "../provider/openai";
+import { CostTracker } from "../provider/tracker";
 import { BashTool } from "../tools/bash";
 import { EditFileTool } from "../tools/edit_file";
 import { ApprovalMiddleware } from "../tools/middleware";
 import { ReadFileTool } from "../tools/read_file";
 import { RegistryImpl } from "../tools/registry";
-import { SubAgentTool } from "../tools/subagent";
 import { WriteFileTool } from "../tools/write_file";
 import type { Context } from "../types/context";
 import { Role } from "../types/message";
@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   // 通过命令行参数接收用户的 prompt（支持 -prompt "xxx" 或直接位置参数 "xxx"）
   const rawArgs = process.argv.slice(2);
   const options = parseCliArgs(
-    rawArgs.length > 0 ? rawArgs : ["--no-plan", "-s", "test_subagent_001", "__DEFAULT_PROMPT__"],
+    rawArgs.length > 0 ? rawArgs : ["--no-plan", "-s", "test_tracker_001", "__DEFAULT_PROMPT__"],
   );
   if (options.help) {
     console.log(HELP);
@@ -39,37 +39,27 @@ async function main(): Promise<void> {
     }
   }
 
-  // 1. 初始化大模型 Provider
-  const provider = OpenAIProvider.fromEnv();
+  // 1. 初始化底层大模型 Provider，并用可观测性装饰器 CostTracker 包裹起来
+  const baseProvider = OpenAIProvider.fromEnv();
+  const modelName = process.env.LLM_MODEL || "deepseek-flash";
+  // 构建 Tracker 装饰器：根据模型名称和单价（如 DeepSeek 报价：输入 1 元/百万Tokens，输出 2 元/百万Tokens）计费并记录耗时
+  const tracker = new CostTracker(baseProvider, modelName, {
+    inputPricePerMillion: 1.0,
+    outputPricePerMillion: 2.0,
+  });
 
-  // 2. 确定物理工作区
-  const hasExplicitWorkDir = rawArgs.includes("-C") || rawArgs.includes("--workdir");
-  const isProjectRoot = existsSync(path.join(process.cwd(), "src", "cli", "main.ts"));
-  const targetWorkDir =
-    !hasExplicitWorkDir && isProjectRoot
-      ? path.join(process.cwd(), "workspace")
-      : options.workDir;
-
+  // 2. 确定物理工作区（直接在当前 git 仓库目录运行，方便使用 bash 执行 git status 列举未提交文件）
   let workDir: string;
   try {
-    if (!hasExplicitWorkDir && isProjectRoot) {
-      mkdirSync(targetWorkDir, { recursive: true });
-    }
-    workDir = realpathSync(targetWorkDir);
+    workDir = realpathSync(options.workDir);
     if (!statSync(workDir).isDirectory()) throw new Error("不是目录");
   } catch (error) {
-    throw new Error(`工作区不存在或无法访问：${targetWorkDir}`, { cause: error });
+    throw new Error(`工作区不存在或无法访问：${options.workDir}`, { cause: error });
   }
 
   const approvalChannel = new CliApprovalChannel();
 
-  // 3.1 为只读侦察型 Sub-Agent 准备受限的注册表 (ReadOnly Registry：仅挂载 read_file 和 bash，不给 write/edit 权限)
-  const readOnlyRegistry = new RegistryImpl();
-  readOnlyRegistry.registerTool(new ReadFileTool(workDir));
-  readOnlyRegistry.registerTool(new BashTool(workDir));
-  readOnlyRegistry.use(new ApprovalMiddleware(approvalChannel));
-
-  // 3.2 为主 Agent 准备大而全的注册表 (Main Registry)
+  // 3. 挂载 4 大基础工具（去掉 Sub-Agent，专注测试 bash 与可观测性统计）
   const mainRegistry = new RegistryImpl();
   mainRegistry.registerTool(new ReadFileTool(workDir));
   mainRegistry.registerTool(new WriteFileTool(workDir));
@@ -77,24 +67,14 @@ async function main(): Promise<void> {
   mainRegistry.registerTool(new EditFileTool(workDir));
   mainRegistry.use(new ApprovalMiddleware(approvalChannel));
 
-  // 4. 实例化主引擎
+  // 4. 实例化主引擎：传入包裹了底层 Provider 的 tracker 装饰器！
   const eng = new AgentEngine(
-    provider,
+    tracker,
     mainRegistry,
     options.thinking,
     options.planMode,
     20,
     new Compactor(options.maxContextChars, 4),
-  );
-
-  // 4.5 将带有 Engine 引用和只读 Registry 的 SubAgent 工具注册进主 Agent 的工具箱中
-  mainRegistry.registerTool(
-    new SubAgentTool(
-      eng,
-      readOnlyRegistry,
-      "explore_subagent",
-      "委派一个只读侦察子智能体（仅拥有 read_file 和 bash 权限，无权修改文件）去深入探索目录或检索文件内容。支持在同一轮并发调用多个 explore_subagent 同时探索不同线索！",
-    ),
   );
 
   const controller = new AbortController();
@@ -105,23 +85,16 @@ async function main(): Promise<void> {
   try {
     const isDefaultDemo = options.prompt === "__DEFAULT_PROMPT__";
     if (isDefaultDemo) {
-      // 每次运行演示测试前，彻底清空 workspace/.claw/sessions 目录下的所有历史记录，
-      // 防止子智能体或 bash grep 扫描工作区时误读到旧会话 .jsonl 中的提示词或旧答案！
-      rmSync(path.join(workDir, ".claw", "sessions"), { recursive: true, force: true });
+      rmSync(path.join(workDir, ".claw", "sessions", "test_tracker_001.jsonl"), { force: true });
     }
 
     const prompt = !isDefaultDemo
       ? options.prompt
-      : `
-我把系统的核心密码藏在了当前工作区的某个角落。目前有两个可疑线索：
-线索 A：根目录下的 fake1.go 和 fake2.go 文件
-线索 B：legacy 目录下的深层配置文件
-
-请你不要亲自去读文件或跑 bash 翻目录（保持你自己的主上下文干净）！
-请在同一轮并发调用两个 explore_subagent 子智能体分别去排查「线索 A」和「线索 B」，拿到它们的汇报后，把核心密码写入根目录的 found_secret.txt 文件中！
-`.trim();
+      : `请使用 bash 工具执行 git status ，帮我列举当前仓库里所有未提交（已修改或未跟踪）的文件，并简要汇总汇报。`;
 
     const session = globalSessionMgr.getOrCreate(options.sessionId, workDir);
+    // 将当前会话绑定到 Tracker，使每次推理的 Token、费用与耗时同步写入 Session 统计字段
+    tracker.bindSession(session);
 
     console.log(`\n>>> 🚀 收到指令: ${prompt}\n`);
 
@@ -137,6 +110,9 @@ async function main(): Promise<void> {
           }
         : {}),
     });
+
+    // 6. 任务结束后直接由 Tracker 打印该 Session 的 Token、费用与时间统计账单
+    tracker.printSummary();
   } finally {
     process.off("SIGINT", cancel);
   }
